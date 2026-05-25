@@ -1,0 +1,143 @@
+import os
+import re
+import pandas as pd
+import numpy as np
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
+# Download necessary NLTK text processing resources
+nltk.download('stopwords', quiet=True)
+nltk.download('punkt', quiet=True)
+
+
+# Step 1 & 2: Define Objective & Load Dataset From Absolute Path
+
+# Objective: Classify text messages as spam or ham.
+
+# Set the explicit file path requested
+csv_filename = r"C:\Users\Beatm\Downloads\archive\spam.csv"
+
+if not os.path.exists(csv_filename):
+    raise FileNotFoundError(
+        f"Could not find the file at: {csv_filename}\n"
+        "Please double-check that the folder path and username are exact."
+    )
+
+# Read dataset with latin-1 encoding and drop any empty trailing columns
+df = pd.read_csv(csv_filename, encoding='latin-1')
+df = df.dropna(how='all', axis=1) 
+df = df.rename(columns={'v1': 'label', 'v2': 'text'})
+
+print("--- Dataset Sample Loaded Successfully ---")
+print(df.head(), "\n")
+
+
+# Step 3: Text Preprocessing Pipeline
+
+def preprocess_text(text):
+    if not isinstance(text, str):
+        return ""
+    # 1. Lowercasing
+    text = text.lower()
+    # 2. Remove punctuation, symbols, and numbers
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    # 3. Tokenization
+    tokens = word_tokenize(text)
+    # 4. Remove Stopwords
+    stop_words = set(stopwords.words('english'))
+    filtered_tokens = [word for word in tokens if word not in stop_words]
+    
+    # Re-join tokens into a single clean text string
+    return " ".join(filtered_tokens)
+
+print("Running text preprocessing pipeline...")
+df['clean_text'] = df['text'].apply(preprocess_text)
+
+# Encode target labels (ham = 0, spam = 1)
+df['label_encoded'] = df['label'].map({'ham': 0, 'spam': 1})
+
+
+# Step 4: Convert Text into Numerical Features (TF-IDF Vectorization)
+
+tfidf = TfidfVectorizer(max_features=3000)
+X = tfidf.fit_transform(df['clean_text'])
+y = df['label_encoded']
+
+
+# Step 5: Split Dataset (80% Train, 20% Test)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42, stratify=y)
+print(f"Training feature shape: {X_train.shape} | Testing feature shape: {X_test.shape}\n")
+
+
+# Step 6 & 7: Model Selection and Training
+
+models = {
+    "Naive Bayes": MultinomialNB(),
+    "Logistic Regression": LogisticRegression(solver='lbfgs', max_iter=400),
+    "Support Vector Machine": SVC(kernel='linear')
+}
+
+trained_models = {}
+for name, model in models.items():
+    print(f"Training {name}...")
+    model.fit(X_train, y_train)
+    trained_models[name] = model
+
+print("\nAll models trained successfully.\n")
+
+
+# Step 8: Evaluate Models (Performance Metrics)
+
+print("--- Model Evaluation Metrics ---")
+performance_report = []
+
+for name, model in trained_models.items():
+    y_pred = model.predict(X_test)
+    
+    acc = accuracy_score(y_test, y_pred)
+    prec = precision_score(y_test, y_pred)
+    rec = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+    
+    performance_report.append({
+        "Model Architecture": name,
+        "Accuracy": f"{(acc * 100):.2f}%",
+        "Precision": f"{prec:.3f}",
+        "Recall": f"{rec:.3f}",
+        "F1-Score": f"{f1:.3f}"
+    })
+
+# Output the evaluation grid summary as a DataFrame table
+report_df = pd.DataFrame(performance_report)
+print(report_df.to_string(index=False), "\n")
+
+
+# Step 9: Test Classifier with New Custom Samples
+
+print("--- Deployment Inference Verification Check ---")
+new_emails = [
+    "URGENT!! You have won a £1,000 cash prize reward! Call 09061701461 now to claim your code.",
+    "Hey, are we still meeting up for dinner tonight after class?"
+]
+
+# Pick the high-precision Support Vector Machine to test live sentences
+chosen_model = trained_models["Support Vector Machine"]
+
+# Pass custom data through the same exact pipeline
+cleaned_samples = [preprocess_text(email) for email in new_emails]
+transformed_samples = tfidf.transform(cleaned_samples)
+
+predictions = chosen_model.predict(transformed_samples)
+
+for email, pred in zip(new_emails, predictions):
+    result = "SPAM 🚨" if pred == 1 else "HAM (Legitimate) ✅"
+    print(f"\nEmail Content: \"{email}\"")
+    print(f"Prediction Result: {result}")
