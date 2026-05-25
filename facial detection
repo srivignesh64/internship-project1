@@ -1,1 +1,151 @@
+import os
+import cv2
+import numpy as np
+import pickle
+import csv
+from datetime import datetime
+from keras_facenet import FaceNet
+from sklearn.svm import SVC
 
+
+# CONFIG 
+
+DATASET_PATH = r"C:\Users\Beatm\Downloads\dataset"
+MODEL_PATH = "model.pkl"
+ATTENDANCE_FILE = "attendance.csv"
+
+
+# FACE DETECTION FUNCTION
+
+def detect_face(image):
+    face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    )
+    
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    
+    if len(faces) == 0:
+        return None
+    
+    (x, y, w, h) = faces[0]
+    face = image[y:y+h, x:x+w]
+    face = cv2.resize(face, (160, 160))
+    
+    return face
+
+# TRAIN MODEL
+
+def train_model():
+    print("🔄 Training model...")
+
+    embedder = FaceNet()
+    X = []
+    y = []
+
+    for person_name in os.listdir(DATASET_PATH):
+        person_path = os.path.join(DATASET_PATH, person_name)
+
+        if not os.path.isdir(person_path):
+            continue
+
+        for img_name in os.listdir(person_path):
+            img_path = os.path.join(person_path, img_name)
+
+            image = cv2.imread(img_path)
+            if image is None:
+                continue
+
+            face = detect_face(image)
+            if face is None:
+                continue
+
+            embedding = embedder.embeddings([face])[0]
+
+            X.append(embedding)
+            y.append(person_name)
+
+    print("✅ Dataset processed")
+
+    model = SVC(kernel='linear', probability=True)
+    model.fit(X, y)
+
+    with open(MODEL_PATH, "wb") as f:
+        pickle.dump(model, f)
+
+    print("✅ Model saved")
+
+
+# MARK ATTENDANCE
+
+def mark_attendance(name, marked):
+    if name in marked:
+        return marked
+
+    with open(ATTENDANCE_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+
+    print(f"✅ Attendance marked for {name}")
+    marked.add(name)
+    return marked
+
+
+# REAL-TIME ATTENDANCE
+
+def run_attendance():
+    print("🎥 Starting camera...")
+
+    with open(MODEL_PATH, "rb") as f:
+        model = pickle.load(f)
+
+    embedder = FaceNet()
+    cap = cv2.VideoCapture(0)
+
+    marked_names = set()
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        face = detect_face(frame)
+
+        if face is not None:
+            embedding = embedder.embeddings([face])[0]
+
+            prediction = model.predict([embedding])[0]
+            probs = model.predict_proba([embedding])[0]
+            confidence = np.max(probs)
+
+            label = f"{prediction} ({confidence:.2f})"
+
+            cv2.putText(frame, label, (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+
+            if confidence > 0.7:
+                marked_names = mark_attendance(prediction, marked_names)
+
+        cv2.imshow("Face Attendance System", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+# MAIN MENU
+
+if __name__ == "__main__":
+    print("\n===== FACE ATTENDANCE SYSTEM =====")
+    print("1. Train Model")
+    print("2. Run Attendance System")
+
+    choice = input("Enter choice (1/2): ")
+
+    if choice == "1":
+        train_model()
+    elif choice == "2":
+        run_attendance()
+    else:
+        print("Invalid choice")
